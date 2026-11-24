@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/models/connection.dart';
 import '../../core/models/ssh_tunnel.dart';
 import '../../core/services/connection_manager.dart';
 import '../../core/services/ssh_key_store.dart';

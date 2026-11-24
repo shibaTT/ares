@@ -157,16 +157,16 @@ class SshTunnelService {
     String? observedFingerprint;
     final pin = _normalizeFingerprint(config.hostKeySha256);
 
-    final Socket socket;
+    final SSHSocket socket;
     try {
-      socket = await Socket.connect(
+      socket = await SSHSocket.connect(
         config.host,
         config.port,
         timeout: connectTimeout,
       );
-    } on SocketException catch (error) {
+    } catch (error) {
       throw SshTunnelException(
-        'Could not reach ${config.host}:${config.port} over SSH: ${error.message}',
+        'Could not reach ${config.host}:${config.port} over SSH: $error',
       );
     }
 
@@ -206,9 +206,8 @@ class SshTunnelService {
       );
     } catch (error) {
       await _disposeClient(client);
-      rethrow is SshTunnelException
-          ? error
-          : SshTunnelException('Gateway attach failed: $error');
+      if (error is SshTunnelException) rethrow;
+      throw SshTunnelException('Gateway attach failed: $error');
     }
 
     final ServerSocket server;
