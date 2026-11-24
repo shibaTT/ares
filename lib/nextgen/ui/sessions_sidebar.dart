@@ -14,7 +14,7 @@ import 'nextgen_scope.dart';
 import 'widgets.dart';
 import '../nextgen_l10n.dart';
 
-enum NgSidebarFilter { all, running, needsYou, crons }
+enum NgSidebarFilter { all, running, needsYou, crons, discord }
 
 /// How a chat row is highlighted, most urgent first: orange while the agent
 /// waits on a question or approval, green when it finished with a reply
@@ -521,6 +521,12 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                     .toList(),
               NgSidebarFilter.crons =>
                 all.where((s) => isCronSession(s)).toList(),
+              // Chats that came in through another surface (Discord today) so
+              // they can be browsed on their own instead of mixed into recent.
+              NgSidebarFilter.discord =>
+                all
+                    .where((s) => s.source == 'discord' && !isCronSession(s))
+                    .toList(),
             };
             final pinned =
                 _filter == NgSidebarFilter.all && widget.model.query.isEmpty
@@ -624,6 +630,8 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                                         context,
                                       )?.cron_conversations_empty ??
                                       'Conversations from scheduled jobs appear here, including older runs.',
+                                NgSidebarFilter.discord =>
+                                  'Discordで始めたチャットがここに出ます。',
                               },
                               textAlign: TextAlign.center,
                               style: NgType.bodySmall.copyWith(color: c.text3),
@@ -773,6 +781,7 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
             NgSidebarFilter.crons,
             AppLocalizations.of(context)?.crons ?? 'Crons',
           ),
+          chip(NgSidebarFilter.discord, 'Discord'),
         ],
       ),
     );
