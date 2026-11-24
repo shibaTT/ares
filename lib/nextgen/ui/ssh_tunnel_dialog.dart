@@ -45,6 +45,8 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
   late final TextEditingController _user;
   late final TextEditingController _fingerprint;
   late final TextEditingController _key;
+  late final TextEditingController _dashUser;
+  late final TextEditingController _dashPass;
 
   late bool _enabled;
   bool _hasStoredKey = false;
@@ -64,6 +66,8 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
     _user = TextEditingController(text: ssh?.username ?? '');
     _fingerprint = TextEditingController(text: ssh?.hostKeySha256 ?? '');
     _key = TextEditingController();
+    _dashUser = TextEditingController();
+    _dashPass = TextEditingController();
     if (!_isNew) _loadStoredKey();
   }
 
@@ -83,6 +87,8 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
     _user.dispose();
     _fingerprint.dispose();
     _key.dispose();
+    _dashUser.dispose();
+    _dashPass.dispose();
     super.dispose();
   }
 
@@ -141,11 +147,16 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
 
       String connectionId;
       SavedConnection result;
+      final dashUser = _dashUser.text.trim();
+      final dashPass = _dashPass.text;
       if (existing == null) {
+        final hasSignIn = dashUser.isNotEmpty && dashPass.isNotEmpty;
         result = await widget.connManager.saveSingleLoginConnection(
           url: GatewayUrl.parse(sshOnlyPlaceholderUrl),
-          signInMethod: 'none',
+          signInMethod: hasSignIn ? 'password' : 'none',
           label: name,
+          username: hasSignIn ? dashUser : null,
+          password: hasSignIn ? dashPass : null,
         );
         connectionId = result.id;
       } else {
@@ -279,6 +290,38 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
                     helperText: _hasStoredKey
                         ? 'A key is already stored. Leave blank to keep it.'
                         : 'Paste the whole key, including the BEGIN/END lines.',
+                  ),
+                ),
+              ],
+              if (_isNew) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'ダッシュボードのサインイン（履歴・設定などREST APIに必要）',
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _dashUser,
+                  enabled: !_busy,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'ダッシュボードのユーザー名',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _dashPass,
+                  enabled: !_busy,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'ダッシュボードのパスワード',
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '空のままだとチャットのWSだけ繋がり、履歴などの読み込みは401になります。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],

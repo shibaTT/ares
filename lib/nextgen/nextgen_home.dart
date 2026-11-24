@@ -123,6 +123,7 @@ class _NextGenHomeState extends State<NextGenHome> {
         privateKeyPem: key ?? '',
       );
       SavedConnection.setSshResolvedBaseUrl(connection.id, session.baseUrl);
+      await _signInThroughTunnel(connection, session);
     } catch (error) {
       SavedConnection.setSshResolvedBaseUrl(connection.id, null);
       debugPrint('SSH tunnel failed for ${connection.label}: $error');
@@ -134,6 +135,28 @@ class _NextGenHomeState extends State<NextGenHome> {
     }
     if (!mounted) return;
     _activate(connection);
+  }
+
+  /// Signs the dashboard session in through the tunnel.
+  ///
+  /// The session cookie is stored per origin, and a tunnel binds a new loopback
+  /// port every run, so it is re-established once per launch with the saved
+  /// credentials. Skipped when no credentials were stored.
+  Future<void> _signInThroughTunnel(
+    SavedConnection connection,
+    SshTunnelSession session,
+  ) async {
+    final username = connection.dashboardUsername?.trim() ?? '';
+    final password = connection.dashboardPassword ?? '';
+    if (username.isEmpty || password.isEmpty) return;
+    final result = await HermesSignIn().passwordSignIn(
+      GatewayUrl.parse(session.baseUrl),
+      username: username,
+      password: password,
+    );
+    if (result is! SignInOk) {
+      debugPrint('SSH dashboard sign-in for ${connection.label}: $result');
+    }
   }
 
   void _activate(SavedConnection connection) {

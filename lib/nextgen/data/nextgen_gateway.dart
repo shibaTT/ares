@@ -11,6 +11,7 @@ import '../../core/services/connection_manager.dart';
 import '../../core/services/dashboard_api_client.dart';
 import '../../core/services/desktop_gateway_client.dart';
 import '../../core/services/hermes_sign_in.dart';
+import '../../core/services/ssh_tunnel_service.dart';
 import '../../core/services/ws_client.dart';
 import '../nextgen_l10n.dart';
 
@@ -179,6 +180,20 @@ class NextGenGateway extends ChangeNotifier {
     if (wake != null && !wake.isCompleted) wake.complete();
   }
 
+  /// Mints a WebSocket ticket over the SSH tunnel.
+  ///
+  /// An SSH-only connection has no dashboard session, so `auth/ws-ticket` would
+  /// answer 401. The gateway's own attach command is used instead: it hands the
+  /// ticket to the SSH caller and nothing else.
+  Future<String?> _sshTicket() async {
+    final session = await SshTunnelService.instance.refreshAttach(connection.id);
+    final ticket = session.ticket;
+    if (ticket == null || ticket.isEmpty) {
+      throw _Retry(ngL.ng_the_gateway_returned_no_websocket_ticket);
+    }
+    return ticket;
+  }
+
   Future<String?> _mintTicket() async {
     final res = await dashboard.apiRequest('POST', 'auth/ws-ticket');
     if (res.statusCode == 401) {
@@ -210,7 +225,8 @@ class NextGenGateway extends ChangeNotifier {
       try {
         String? ticket;
         try {
-          ticket = await _mintTicket();
+          ticket =
+              connection.ssh != null ? await _sshTicket() : await _mintTicket();
         } on DashboardHttpException catch (e) {
           if (e.statusCode == 401) {
             _set(const NgConnectionState(NgConnectionPhase.sessionExpired));

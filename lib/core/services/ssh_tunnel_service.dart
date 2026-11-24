@@ -89,6 +89,23 @@ class SshTunnelSession {
   }) : startedAt = DateTime.now();
 
   Uri get uri => Uri.parse(baseUrl);
+
+  /// Same tunnel, with a freshly minted attach credential.
+  SshTunnelSession copyWithAttach({
+    String? ticket,
+    String? wsUrl,
+    List<String>? protocols,
+  }) => SshTunnelSession(
+    connectionId: connectionId,
+    config: config,
+    baseUrl: baseUrl,
+    localPort: localPort,
+    remoteOrigin: remoteOrigin,
+    protocols: protocols ?? this.protocols,
+    ticket: ticket ?? this.ticket,
+    wsUrl: wsUrl ?? this.wsUrl,
+    hostKeyFingerprint: hostKeyFingerprint,
+  );
 }
 
 /// Starts and owns SSH tunnels for Hermes connections.
@@ -235,6 +252,33 @@ class SshTunnelService {
     );
     _tunnels[connection.id] = tunnel;
     tunnel.listen();
+    return tunnel.session;
+  }
+
+  /// Mints a fresh attach credential over a live tunnel.
+  ///
+  /// `hermes gateway attach` tickets are single-use and expire within seconds,
+  /// so every WebSocket attempt needs its own. The dashboard's HTTP ticket
+  /// endpoint is not usable here: an SSH-only connection has no signed-in
+  /// session to mint one with.
+  Future<SshTunnelSession> refreshAttach(String connectionId) async {
+    final tunnel = _tunnels[connectionId];
+    if (tunnel == null || tunnel.isClosed) {
+      throw const SshTunnelException(
+        'The SSH tunnel is not up. Reconnect to bring it back.',
+      );
+    }
+    final endpoint = await _attach(tunnel.client, tunnel.session.config).timeout(
+      attachTimeout,
+      onTimeout: () => throw const SshTunnelException(
+        'The gateway attach command did not answer in time.',
+      ),
+    );
+    tunnel.session = tunnel.session.copyWithAttach(
+      ticket: endpoint.ticket,
+      wsUrl: endpoint.wsUrl,
+      protocols: endpoint.protocols,
+    );
     return tunnel.session;
   }
 
@@ -392,7 +436,8 @@ class SshTunnelService {
 class _Tunnel {
   _Tunnel({required this.session, required this.client, required this.server});
 
-  final SshTunnelSession session;
+  /// Replaced whenever a fresh attach credential is minted.
+  SshTunnelSession session;
   final SSHClient client;
   final ServerSocket server;
   final List<Socket> _sockets = <Socket>[];
