@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  KEYSTORE_PATH: ${{ github.workspace }}/android/fork-debug.jks
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,10 +24,35 @@ jobs:
         with:
           flutter-version: '3.44.0'
           channel: 'stable'
+      # A stable key: Android refuses an update signed by a different key, and the
+      # runner's debug keystore is regenerated for every job.
+      - name: Restore signing key
+        run: |
+          echo "${{ secrets.FORK_KEYSTORE_B64 }}" | base64 -d > "$KEYSTORE_PATH"
+          ls -l "$KEYSTORE_PATH"
+      # A fresh versionCode per run, so an update is always an upgrade.
+      - name: Bump versionCode
+        run: |
+          CODE=$((3066 + ${{ github.run_number }}))
+          sed -i "s/^version: .*/version: 4.0.10+$CODE/" pubspec.yaml
+          grep '^version:' pubspec.yaml
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: flutter pub get
       - name: Build debug APK (arm64)
+        env:
+          FORK_KEYSTORE_FILE: ${{ env.KEYSTORE_PATH }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_ALIAS: ${{ secrets.FORK_KEY_ALIAS }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
         run: flutter build apk --debug --target-platform android-arm64
+      - name: Verify signature and versionCode
+        run: |
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "build-tools: $BT"
+          "$BT/apksigner" verify --print-certs "$APK" | head -4
+          "$BT/aapt2" dump badging "$APK" | grep -E "^package:"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

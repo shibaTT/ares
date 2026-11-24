@@ -1,4 +1,5 @@
 import com.android.build.gradle.internal.api.ApkVariantOutputImpl
+import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -54,6 +55,18 @@ android {
                keyPassword = keystoreProperties["keyPassword"] as String
            }
        }
+       // CI fork builds reuse one keystore: Android refuses to install an update
+       // signed by a different key, and the runner's debug keystore is
+       // regenerated for every job, so each build used to be un-installable.
+       create("fork") {
+           val storePath = System.getenv("FORK_KEYSTORE_FILE")
+           if (!storePath.isNullOrEmpty() && File(storePath).exists()) {
+               storeFile = File(storePath)
+               storePassword = System.getenv("FORK_KEYSTORE_PASSWORD")
+               keyAlias = System.getenv("FORK_KEY_ALIAS")
+               keyPassword = System.getenv("FORK_KEY_PASSWORD")
+           }
+       }
    }
 
    buildTypes {
@@ -64,6 +77,10 @@ android {
            applicationIdSuffix = ".dev"
            versionNameSuffix = "-dev"
            manifestPlaceholders["appLabel"] = "Ares Dev"
+           val forkStore = System.getenv("FORK_KEYSTORE_FILE")
+           if (!forkStore.isNullOrEmpty() && File(forkStore).exists()) {
+               signingConfig = signingConfigs.getByName("fork")
+           }
        }
        release {
            isMinifyEnabled = true
