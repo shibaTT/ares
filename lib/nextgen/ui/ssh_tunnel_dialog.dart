@@ -15,18 +15,17 @@ const String sshOnlyPlaceholderUrl = 'http://127.0.0.1:9119';
 ///
 /// With a [connection] the dialog edits that connection's tunnel; without one it
 /// creates a new single-login gateway that is reachable only over SSH.
-/// Returns `true` when something was saved.
-Future<bool> showSshTunnelDialog(
+/// Returns the saved connection (or null when nothing was saved).
+Future<SavedConnection?> showSshTunnelDialog(
   BuildContext context, {
   SavedConnection? connection,
   required ConnectionManager connManager,
 }) async {
-  final saved = await showDialog<bool>(
+  return showDialog<SavedConnection>(
     context: context,
     builder: (_) =>
         _SshTunnelDialog(connection: connection, connManager: connManager),
   );
-  return saved ?? false;
 }
 
 class _SshTunnelDialog extends StatefulWidget {
@@ -107,7 +106,9 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
         await SshKeyStore.instance.deleteKey(existing.id);
         await SshTunnelService.instance.close(existing.id);
         SavedConnection.setSshResolvedBaseUrl(existing.id, null);
-        if (mounted) Navigator.of(context).pop(true);
+        if (mounted) {
+          Navigator.of(context).pop(existing.copyWith(clearSsh: true));
+        }
         return;
       }
 
@@ -139,15 +140,17 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
       );
 
       String connectionId;
+      SavedConnection result;
       if (existing == null) {
-        final saved = await widget.connManager.saveSingleLoginConnection(
+        result = await widget.connManager.saveSingleLoginConnection(
           url: GatewayUrl.parse(sshOnlyPlaceholderUrl),
           signInMethod: 'none',
           label: name,
         );
-        connectionId = saved.id;
+        connectionId = result.id;
       } else {
         connectionId = existing.id;
+        result = existing;
       }
 
       if (pastedKey.isNotEmpty) {
@@ -157,7 +160,9 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
       // Force the next connect to build a fresh tunnel with these settings.
       await SshTunnelService.instance.close(connectionId);
       SavedConnection.setSshResolvedBaseUrl(connectionId, null);
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) {
+        Navigator.of(context).pop(result.copyWith(ssh: config));
+      }
     } catch (error) {
       _fail('Could not save the SSH settings: $error');
     }

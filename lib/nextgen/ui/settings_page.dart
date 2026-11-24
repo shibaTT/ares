@@ -371,7 +371,7 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
       context,
       connManager: scope.connManager,
     );
-    if (!saved || !mounted) return;
+    if (saved == null || !mounted) return;
     await scope.reload();
   }
 
@@ -382,7 +382,7 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
       connection: conn,
       connManager: scope.connManager,
     );
-    if (!saved || !mounted) return;
+    if (saved == null || !mounted) return;
     // Re-read the saved connection so the next connect dials through the tunnel.
     await scope.reload();
   }

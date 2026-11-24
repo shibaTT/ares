@@ -17,6 +17,7 @@ import '../../core/services/lan_discovery_service.dart';
 import '../../core/widgets/setup_interface_choice.dart';
 import '../theme/nextgen_theme.dart';
 import 'certificate_picker.dart';
+import 'ssh_tunnel_dialog.dart';
 import 'widgets.dart';
 import '../nextgen_l10n.dart';
 
@@ -126,6 +127,15 @@ class _NgConnectScreenState extends State<NgConnectScreen> {
     _pendingProfileChoice = null;
     _persistPending = null;
     _signedInProfiles = const [];
+  }
+
+  Future<void> _connectOverSsh() async {
+    final saved = await showSshTunnelDialog(
+      context,
+      connManager: widget.connManager,
+    );
+    if (saved == null || !mounted) return;
+    widget.onConnected(saved);
   }
 
   Future<void> _test() async {
@@ -517,6 +527,20 @@ class _NgConnectScreenState extends State<NgConnectScreen> {
               onTap: () => setState(() => _showCertificate = !_showCertificate),
             ),
           ],
+        ),
+        const SizedBox(height: 18),
+        NgPrimaryButton(
+          label: 'SSHトンネルで接続',
+          icon: Icons.terminal,
+          onPressed: _connectOverSsh,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+          child: Text(
+            'ダッシュボードを外部に公開せず、SSHホスト経由で繋ぎます。'
+            'Pi側に追加のサーバーは立てません。',
+            style: NgType.caption.copyWith(color: c.text3),
+          ),
         ),
         if (_showAccess) ...[const SizedBox(height: 16), _accessCard(c)],
         if (_showCertificate) ...[
