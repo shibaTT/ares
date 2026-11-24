@@ -206,6 +206,12 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
                       title: ngL.ng_add_a_gateway,
                       onTap: scope.addGateway,
                     ),
+                    NgRow(
+                      icon: Icons.terminal,
+                      title: 'Add SSH gateway',
+                      subtitle: 'Reach Hermes through an SSH host (no open port)',
+                      onTap: _addSshGateway,
+                    ),
                   ],
                 ),
               ),
@@ -357,6 +363,16 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _addSshGateway() async {
+    final scope = NgScope.of(context);
+    final saved = await showSshTunnelDialog(
+      context,
+      connManager: scope.connManager,
+    );
+    if (!saved || !mounted) return;
+    await scope.reload();
   }
 
   Future<void> _editSsh(SavedConnection conn) async {

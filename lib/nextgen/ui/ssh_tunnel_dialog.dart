@@ -2,17 +2,23 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/ssh_tunnel.dart';
 import '../../core/services/connection_manager.dart';
+import '../../core/services/hermes_sign_in.dart';
 import '../../core/services/ssh_key_store.dart';
 import '../../core/services/ssh_tunnel_service.dart';
 
-/// Opens the SSH tunnel editor for [connection].
+/// Placeholder dashboard address for a connection that is only ever reached
+/// through its SSH tunnel. [SavedConnection.singleLoginUrl] is overridden by the
+/// live tunnel address, so this value is never dialled.
+const String sshOnlyPlaceholderUrl = 'http://127.0.0.1:9119';
+
+/// Opens the SSH tunnel editor.
 ///
-/// Returns `true` when the settings were saved. The private key goes to the
-/// platform secure store; only the host, port, user and an optional pinned
-/// fingerprint are written to the connection metadata.
+/// With a [connection] the dialog edits that connection's tunnel; without one it
+/// creates a new single-login gateway that is reachable only over SSH.
+/// Returns `true` when something was saved.
 Future<bool> showSshTunnelDialog(
   BuildContext context, {
-  required SavedConnection connection,
+  SavedConnection? connection,
   required ConnectionManager connManager,
 }) async {
   final saved = await showDialog<bool>(
@@ -24,9 +30,9 @@ Future<bool> showSshTunnelDialog(
 }
 
 class _SshTunnelDialog extends StatefulWidget {
-  const _SshTunnelDialog({required this.connection, required this.connManager});
+  const _SshTunnelDialog({this.connection, required this.connManager});
 
-  final SavedConnection connection;
+  final SavedConnection? connection;
   final ConnectionManager connManager;
 
   @override
@@ -34,6 +40,7 @@ class _SshTunnelDialog extends StatefulWidget {
 }
 
 class _SshTunnelDialogState extends State<_SshTunnelDialog> {
+  late final TextEditingController _name;
   late final TextEditingController _host;
   late final TextEditingController _port;
   late final TextEditingController _user;
@@ -45,27 +52,33 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
   bool _busy = false;
   String? _error;
 
+  bool get _isNew => widget.connection == null;
+
   @override
   void initState() {
     super.initState();
-    final ssh = widget.connection.ssh;
-    _enabled = ssh != null;
+    final ssh = widget.connection?.ssh;
+    _enabled = _isNew || ssh != null;
+    _name = TextEditingController(text: widget.connection?.label ?? '');
     _host = TextEditingController(text: ssh?.host ?? '');
     _port = TextEditingController(text: '${ssh?.port ?? 22}');
     _user = TextEditingController(text: ssh?.username ?? '');
     _fingerprint = TextEditingController(text: ssh?.hostKeySha256 ?? '');
     _key = TextEditingController();
-    _loadStoredKey();
+    if (!_isNew) _loadStoredKey();
   }
 
   Future<void> _loadStoredKey() async {
-    final has = await SshKeyStore.instance.hasKey(widget.connection.id);
+    final connection = widget.connection;
+    if (connection == null) return;
+    final has = await SshKeyStore.instance.hasKey(connection.id);
     if (!mounted) return;
     setState(() => _hasStoredKey = has);
   }
 
   @override
   void dispose() {
+    _name.dispose();
     _host.dispose();
     _port.dispose();
     _user.dispose();
@@ -74,63 +87,79 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
     super.dispose();
   }
 
+  void _fail(String message) {
+    setState(() {
+      _error = message;
+      _busy = false;
+    });
+  }
+
   Future<void> _save() async {
     setState(() {
       _busy = true;
       _error = null;
     });
+    final existing = widget.connection;
+
     try {
-      if (!_enabled) {
-        await widget.connManager.updateSshTunnel(widget.connection.id, null);
-        await SshKeyStore.instance.deleteKey(widget.connection.id);
-        await SshTunnelService.instance.close(widget.connection.id);
-        SavedConnection.setSshResolvedBaseUrl(widget.connection.id, null);
+      if (!_enabled && existing != null) {
+        await widget.connManager.updateSshTunnel(existing.id, null);
+        await SshKeyStore.instance.deleteKey(existing.id);
+        await SshTunnelService.instance.close(existing.id);
+        SavedConnection.setSshResolvedBaseUrl(existing.id, null);
         if (mounted) Navigator.of(context).pop(true);
         return;
       }
 
+      final name = _name.text.trim();
       final host = _host.text.trim();
       final user = _user.text.trim();
       final port = int.tryParse(_port.text.trim()) ?? 0;
+      if (_isNew && name.isEmpty) {
+        _fail('Give the gateway a name.');
+        return;
+      }
       if (host.isEmpty || user.isEmpty || port <= 0) {
-        setState(() {
-          _error = 'SSH host, user and port are required.';
-          _busy = false;
-        });
+        _fail('SSH host, user and port are required.');
         return;
       }
 
       final pastedKey = _key.text.trim();
       if (pastedKey.isEmpty && !_hasStoredKey) {
-        setState(() {
-          _error = 'Paste the SSH private key (OpenSSH or PEM, no passphrase).';
-          _busy = false;
-        });
+        _fail('Paste the SSH private key (OpenSSH or PEM, no passphrase).');
         return;
-      }
-      if (pastedKey.isNotEmpty) {
-        await SshKeyStore.instance.writeKey(widget.connection.id, pastedKey);
       }
 
       final fingerprint = _fingerprint.text.trim();
-      await widget.connManager.updateSshTunnel(
-        widget.connection.id,
-        SshTunnelConfig(
-          host: host,
-          port: port,
-          username: user,
-          hostKeySha256: fingerprint.isEmpty ? null : fingerprint,
-        ),
+      final config = SshTunnelConfig(
+        host: host,
+        port: port,
+        username: user,
+        hostKeySha256: fingerprint.isEmpty ? null : fingerprint,
       );
-      // Force the next connect to build a fresh tunnel with the new settings.
-      await SshTunnelService.instance.close(widget.connection.id);
-      SavedConnection.setSshResolvedBaseUrl(widget.connection.id, null);
+
+      String connectionId;
+      if (existing == null) {
+        final saved = await widget.connManager.saveSingleLoginConnection(
+          url: GatewayUrl.parse(sshOnlyPlaceholderUrl),
+          signInMethod: 'none',
+          label: name,
+        );
+        connectionId = saved.id;
+      } else {
+        connectionId = existing.id;
+      }
+
+      if (pastedKey.isNotEmpty) {
+        await SshKeyStore.instance.writeKey(connectionId, pastedKey);
+      }
+      await widget.connManager.updateSshTunnel(connectionId, config);
+      // Force the next connect to build a fresh tunnel with these settings.
+      await SshTunnelService.instance.close(connectionId);
+      SavedConnection.setSshResolvedBaseUrl(connectionId, null);
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {
-      setState(() {
-        _error = 'Could not save the SSH settings: $error';
-        _busy = false;
-      });
+      _fail('Could not save the SSH settings: $error');
     }
   }
 
@@ -142,67 +171,94 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
         children: [
           const Icon(Icons.terminal, size: 20),
           const SizedBox(width: 8),
-          Expanded(child: Text('SSH tunnel', style: theme.textTheme.titleMedium)),
+          Expanded(
+            child: Text(
+              _isNew ? 'New SSH gateway' : 'SSH tunnel',
+              style: theme.textTheme.titleMedium,
+            ),
+          ),
         ],
       ),
       content: SizedBox(
-        width: 380,
+        width: 400,
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Reaches this connection through an SSH host: the app runs '
-                '"hermes gateway attach" there and forwards the gateway port '
-                'to this device. No extra server process is started.',
+                'Connects through an SSH host: the app runs '
+                '"hermes gateway attach" there and forwards the gateway port to '
+                'this device. No extra server process is started, and only the '
+                'SSH port has to be reachable.',
                 style: theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Connect over SSH'),
-                value: _enabled,
-                onChanged: _busy
-                    ? null
-                    : (value) => setState(() => _enabled = value),
-              ),
+              if (!_isNew)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Connect over SSH'),
+                  value: _enabled,
+                  onChanged: _busy
+                      ? null
+                      : (value) => setState(() => _enabled = value),
+                ),
               if (_enabled) ...[
+                if (_isNew) ...[
+                  TextField(
+                    controller: _name,
+                    enabled: !_busy,
+                    decoration: const InputDecoration(
+                      labelText: 'Gateway name',
+                      hintText: 'Pi (SSH)',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: TextField(
+                        controller: _host,
+                        enabled: !_busy,
+                        autocorrect: false,
+                        decoration: const InputDecoration(
+                          labelText: 'SSH host',
+                          hintText: '192.168.0.24',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _port,
+                        enabled: !_busy,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Port'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 TextField(
                   controller: _user,
                   enabled: !_busy,
+                  autocorrect: false,
                   decoration: const InputDecoration(
                     labelText: 'SSH user',
                     hintText: 'torippy',
                   ),
-                  autocorrect: false,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _host,
-                  enabled: !_busy,
-                  decoration: const InputDecoration(
-                    labelText: 'SSH host',
-                    hintText: '192.168.0.24',
-                  ),
-                  autocorrect: false,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _port,
-                  enabled: !_busy,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'SSH port'),
                 ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _fingerprint,
                   enabled: !_busy,
+                  autocorrect: false,
                   decoration: const InputDecoration(
                     labelText: 'Host key fingerprint (optional)',
                     hintText: 'SHA256:…',
                   ),
-                  autocorrect: false,
                 ),
                 const SizedBox(height: 8),
                 TextField(
@@ -210,6 +266,7 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
                   enabled: !_busy,
                   maxLines: 5,
                   minLines: 3,
+                  autocorrect: false,
                   style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                   decoration: InputDecoration(
                     labelText: 'SSH private key',
@@ -218,7 +275,6 @@ class _SshTunnelDialogState extends State<_SshTunnelDialog> {
                         ? 'A key is already stored. Leave blank to keep it.'
                         : 'Paste the whole key, including the BEGIN/END lines.',
                   ),
-                  autocorrect: false,
                 ),
               ],
               if (_error != null) ...[
