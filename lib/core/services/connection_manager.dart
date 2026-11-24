@@ -2543,6 +2543,7 @@ class DashboardClient {
   final String? _username;
   final String? _password;
   final String? _gatewayProfile;
+  final bool _usesGatewayTickets;
   String? _token;
   String? _cookie;
   String? _staleBearer;
@@ -2554,6 +2555,10 @@ class DashboardClient {
   Future<String>? _tokenInFlight;
 
   String get baseUrl => _baseUrl;
+
+  /// Transport shared with sibling clients so every REST call carries the same
+  /// credentials (an SSH tunnel adds a one-shot ticket per request here).
+  http.Client get httpClient => _http;
 
   /// Selected connection profile; generic API helpers deliberately do not add it.
   String? get gatewayProfile => _gatewayProfile;
@@ -2573,7 +2578,9 @@ class DashboardClient {
     ClientCertificateConfig? clientCertificate,
     TlsClientFactory tlsClientFactory = const TlsClientFactory(),
     http.Client? httpClient,
+    bool usesGatewayTickets = false,
   }) : _proxied = proxied,
+       _usesGatewayTickets = usesGatewayTickets,
        _username = username,
        _password = password,
        _gatewayProfile = gatewayProfile?.trim().isEmpty == true
@@ -2616,6 +2623,7 @@ class DashboardClient {
       clientCertificate: connection.clientCertificate,
       tlsClientFactory: tlsClientFactory,
       httpClient: client,
+      usesGatewayTickets: connection.ssh != null,
     );
   }
 
@@ -2790,6 +2798,11 @@ class DashboardClient {
       };
     }
     if (_proxied) return {...access, 'Content-Type': 'application/json'};
+    if (_usesGatewayTickets) {
+      // The transport adds a single-use X-Hermes-Gateway-Ticket per request,
+      // and an SSH-only gateway embeds no SPA token to find.
+      return {...access, 'Content-Type': 'application/json'};
+    }
     if (_usesPasswordAuth) {
       return {
         ...access,

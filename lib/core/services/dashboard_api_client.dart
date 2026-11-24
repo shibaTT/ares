@@ -206,7 +206,7 @@ class DashboardApiClient extends ApiClient {
 
   /// Shares an existing [DashboardClient] (and its sign-in) with this client.
   DashboardApiClient.withDashboard(DashboardClient dashboard, {String? profile})
-    : this._(dashboard, profile, null);
+    : this._(dashboard, profile, dashboard.httpClient);
 
   factory DashboardApiClient.fromConnection(
     SavedConnection connection, {
