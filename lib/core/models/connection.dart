@@ -116,7 +116,7 @@ class SavedConnection {
   });
 
   /// Tunnel base URL currently published for this connection, if any.
-  String? get sshResolvedBaseUrl => _sshResolvedBaseUrls[id];
+  String? get resolvedSshBaseUrl => SavedConnection.sshResolvedBaseUrl(id);
 
   /// The dashboard address of a [singleLogin] connection.
   ///

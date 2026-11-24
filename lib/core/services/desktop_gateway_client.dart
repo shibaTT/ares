@@ -131,7 +131,7 @@ class DesktopGatewayClient implements SlashCommandGateway {
   /// transport: an omitted default port and an explicit one must resolve to
   /// the same string, or the same gateway would be recorded under two scopes.
   static String normalizedGatewayBaseUrl(SavedConnection connection) {
-    final tunnelled = connection.sshResolvedBaseUrl;
+    final tunnelled = connection.resolvedSshBaseUrl;
     if (tunnelled != null && tunnelled.isNotEmpty) {
       final parsed = Uri.tryParse(tunnelled);
       if (parsed != null && parsed.host.isNotEmpty) {

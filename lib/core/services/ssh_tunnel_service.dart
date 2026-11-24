@@ -530,6 +530,7 @@ class _Tunnel {
     final session = await client.execute(SshTunnelService.defaultTicketCommand);
     _ticketSession = session;
     _ticketLines = session.stdout
+        .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(_handleTicketLine, onDone: _handleTicketGone);
@@ -649,7 +650,7 @@ class _Tunnel {
     } catch (_) {}
     _ticketLines = null;
     try {
-      await _ticketSession?.close();
+      _ticketSession?.close();
     } catch (_) {}
     _handleTicketGone();
     for (final socket in List<Socket>.of(_sockets)) {
