@@ -41,8 +41,8 @@ class SshTunnelConfig {
   /// `hermes` usually lives in `~/.local/bin`, which a non-interactive SSH
   /// session does not put on PATH.
   static const String defaultAttachCommand =
-      'PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH" '
-      'hermes gateway attach --timeout 15';
+      r'PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH" '
+      r'hermes gateway attach --timeout 15';
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'host': host,
