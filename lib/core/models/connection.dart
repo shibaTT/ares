@@ -1,4 +1,5 @@
 import 'client_certificate.dart';
+import 'ssh_tunnel.dart';
 
 /// Connection model for remote Hermes Gateway API Server.
 class NormalizedConnectionHost {
@@ -68,6 +69,31 @@ class SavedConnection {
   /// `none` (an open dashboard). Null for classic connections.
   final String? signInMethod;
 
+  /// Optional SSH tunnel. When set, the app reaches this connection through an
+  /// SSH host (running `hermes gateway attach` there) instead of dialling
+  /// [desktopGatewayUrl] directly over the network.
+  final SshTunnelConfig? ssh;
+
+  /// Loopback base URLs published by live SSH tunnels, keyed by connection id.
+  ///
+  /// [singleLoginUrl] prefers these over [desktopGatewayUrl] so every existing
+  /// caller (REST, `/api/ws`, dashboards) follows the tunnel once it is up.
+  static final Map<String, String> _sshResolvedBaseUrls = <String, String>{};
+
+  /// Publishes (or clears, with null) the tunnel base URL for [connectionId].
+  static void setSshResolvedBaseUrl(String connectionId, String? baseUrl) {
+    final value = baseUrl?.trim();
+    if (value == null || value.isEmpty) {
+      _sshResolvedBaseUrls.remove(connectionId);
+      return;
+    }
+    _sshResolvedBaseUrls[connectionId] = value;
+  }
+
+  /// Tunnel base URL currently published for [connectionId], if any.
+  static String? sshResolvedBaseUrl(String connectionId) =>
+      _sshResolvedBaseUrls[connectionId];
+
   SavedConnection({
     required this.id,
     required this.label,
@@ -86,10 +112,18 @@ class SavedConnection {
     this.clientCertificate,
     this.singleLogin = false,
     this.signInMethod,
+    this.ssh,
   });
 
   /// The dashboard address of a [singleLogin] connection.
-  String? get singleLoginUrl => singleLogin ? desktopGatewayUrl : null;
+  ///
+  /// While an SSH tunnel is live for this connection its loopback address wins,
+  /// so REST calls and the `/api/ws` socket follow the tunnel automatically.
+  String? get singleLoginUrl {
+    final tunnelled = _sshResolvedBaseUrls[id];
+    if (tunnelled != null && tunnelled.isNotEmpty) return tunnelled;
+    return singleLogin ? desktopGatewayUrl : null;
+  }
 
   /// Whether a browser (bearer-token) sign-in authenticates this connection.
   bool get usesBrowserSignIn => singleLogin && signInMethod == 'browser';
@@ -207,6 +241,9 @@ class SavedConnection {
     if (clientCertificate != null) {
       m['client_certificate'] = clientCertificate!.toJson();
     }
+    if (ssh != null) {
+      m['ssh'] = ssh!.toJson();
+    }
     if (singleLogin) {
       m['single_login'] = true;
       if (signInMethod != null) m['sign_in_method'] = signInMethod;
@@ -245,6 +282,12 @@ class SavedConnection {
       },
       singleLogin: (map['single_login'] as bool?) ?? false,
       signInMethod: nonEmpty(map['sign_in_method']),
+      ssh: switch (map['ssh']) {
+        final Map<dynamic, dynamic> value => SshTunnelConfig.fromJson(
+          Map<String, dynamic>.from(value),
+        ),
+        _ => null,
+      },
     );
   }
 
@@ -268,6 +311,8 @@ class SavedConnection {
     ClientCertificateConfig? clientCertificate,
     bool? singleLogin,
     String? signInMethod,
+    SshTunnelConfig? ssh,
+    bool clearSsh = false,
     bool clearGatewayPrefix = false,
     bool clearDashboardPrefix = false,
     bool clearDashboardPort = false,
@@ -311,6 +356,7 @@ class SavedConnection {
           : (clientCertificate ?? this.clientCertificate),
       singleLogin: singleLogin ?? this.singleLogin,
       signInMethod: signInMethod ?? this.signInMethod,
+      ssh: clearSsh ? null : (ssh ?? this.ssh),
     );
   }
 }

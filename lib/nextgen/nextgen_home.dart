@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 
 import '../core/services/connection_manager.dart';
 import '../core/services/hermes_sign_in.dart';
+import '../core/services/ssh_key_store.dart';
+import '../core/services/ssh_tunnel_service.dart';
 import 'data/nextgen_gateway.dart';
 import 'nextgen_preferences.dart';
 import 'theme/nextgen_theme.dart';
@@ -102,6 +104,40 @@ class _NextGenHomeState extends State<NextGenHome> {
         _sameAccess(current.connection, connection)) {
       return;
     }
+    if (connection.ssh != null) {
+      unawaited(_useViaTunnel(connection));
+      return;
+    }
+    _activate(connection);
+  }
+
+  /// Brings up the SSH tunnel for [connection], then activates it.
+  ///
+  /// The gateway on the SSH host is reused (`hermes gateway attach`), so no
+  /// server process is started there.
+  Future<void> _useViaTunnel(SavedConnection connection) async {
+    try {
+      final key = await SshKeyStore.instance.readKey(connection.id);
+      final session = await SshTunnelService.instance.ensure(
+        connection: connection,
+        privateKeyPem: key ?? '',
+      );
+      SavedConnection.setSshResolvedBaseUrl(connection.id, session.baseUrl);
+    } catch (error) {
+      SavedConnection.setSshResolvedBaseUrl(connection.id, null);
+      debugPrint('SSH tunnel failed for ${connection.label}: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('SSH: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    _activate(connection);
+  }
+
+  void _activate(SavedConnection connection) {
+    final current = _gateway;
     final next = NextGenGateway(connection)..start();
     setState(() {
       _gateway = next;
@@ -119,7 +155,9 @@ class _NextGenHomeState extends State<NextGenHome> {
       a.dashboardUsername == b.dashboardUsername &&
       a.dashboardPassword == b.dashboardPassword &&
       a.gatewayProfile == b.gatewayProfile &&
-      a.signInMethod == b.signInMethod;
+      a.signInMethod == b.signInMethod &&
+      a.ssh?.label == b.ssh?.label &&
+      a.ssh?.hostKeySha256 == b.ssh?.hostKeySha256;
 
   Future<void> _switchTo(String id) async {
     final target = _connections?.where((c) => c.id == id).firstOrNull;

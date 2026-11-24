@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/client_certificate.dart';
 import '../models/connection.dart';
+import '../models/ssh_tunnel.dart';
 import '../models/session.dart';
 import '../models/provider_oauth.dart';
 import '../models/fallback_config.dart';
@@ -698,6 +699,30 @@ class ConnectionManager {
       previousConnections: previousConnections,
     );
   });
+
+  /// Attaches, replaces or removes (with null) the SSH tunnel settings on an
+  /// existing connection. Nothing else about the connection is touched, and the
+  /// SSH private key lives in the platform secure store rather than here.
+  Future<void> updateSshTunnel(String connId, SshTunnelConfig? config) =>
+      _withSavedListTransaction([connId], () async {
+        final current = await _loadConnectionsWithSecrets();
+        final idx = current.indexWhere((c) => c.id == connId);
+        if (idx < 0) return;
+
+        final previousConnections = List<SavedConnection>.of(current);
+        final previousCredentials = _ConnectionCredentials.fromConnection(
+          current[idx],
+        );
+
+        current[idx] = current[idx].copyWith(ssh: config, clearSsh: config == null);
+        await _commitCredentialAndMetadata(
+          connectionId: connId,
+          previousCredentials: previousCredentials,
+          nextCredentials: _ConnectionCredentials.fromConnection(current[idx]),
+          connections: current,
+          previousConnections: previousConnections,
+        );
+      });
 
   /// Updates the dashboard port + basic-auth credentials on an existing
   /// connection. Empty strings clear the corresponding field.

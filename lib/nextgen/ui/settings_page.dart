@@ -17,6 +17,7 @@ import '../data/connection_check.dart';
 import '../nextgen_preferences.dart';
 import '../theme/nextgen_theme.dart';
 import 'nextgen_scope.dart';
+import 'ssh_tunnel_dialog.dart';
 import 'widgets.dart';
 import '../nextgen_l10n.dart';
 
@@ -143,6 +144,15 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
                   Wrap(
                     spacing: 8,
                     children: [
+                      TextButton.icon(
+                        onPressed: () => _editSsh(conn),
+                        icon: const Icon(Icons.terminal, size: 18),
+                        label: Text(
+                          conn.ssh == null
+                              ? 'SSH tunnel'
+                              : 'SSH: ${conn.ssh!.host}',
+                        ),
+                      ),
                       TextButton.icon(
                         onPressed: _checking ? null : _check,
                         icon: const Icon(Icons.network_check, size: 18),
@@ -347,6 +357,18 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _editSsh(SavedConnection conn) async {
+    final scope = NgScope.of(context);
+    final saved = await showSshTunnelDialog(
+      context,
+      connection: conn,
+      connManager: scope.connManager,
+    );
+    if (!saved || !mounted) return;
+    // Re-read the saved connection so the next connect dials through the tunnel.
+    await scope.reload();
   }
 
   Future<void> _signOut(SavedConnection conn) async {
