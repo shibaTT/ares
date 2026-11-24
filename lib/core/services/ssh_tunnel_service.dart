@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/connection.dart';
 import '../models/ssh_tunnel.dart';
@@ -119,10 +120,23 @@ class SshTunnelService {
 
   static final SshTunnelService instance = SshTunnelService._();
 
+  /// Runs `hermes gateway tickets --serve` on the host: it mints single-use
+  /// HTTP tickets for REST calls, which the dashboard's own endpoints refuse
+  /// without a signed-in session.
+  static const String defaultTicketCommand =
+      r'PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH" '
+      r'hermes gateway tickets --serve';
+
   static const Duration connectTimeout = Duration(seconds: 25);
   static const Duration attachTimeout = Duration(seconds: 40);
 
   final Map<String, _Tunnel> _tunnels = <String, _Tunnel>{};
+
+  /// Last loopback port bound for a connection, reused when a tunnel is rebuilt.
+  ///
+  /// The REST client captures its base URL once, so a rebuilt tunnel must come
+  /// back on the same port or every later request dials a closed socket.
+  final Map<String, int> _preferredPorts = <String, int>{};
 
   /// Base URL currently tunnelled for [connectionId], if any.
   String? baseUrlFor(String connectionId) => _tunnels[connectionId]?.session.baseUrl;
@@ -229,7 +243,7 @@ class SshTunnelService {
 
     final ServerSocket server;
     try {
-      server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      server = await _bindLocal(connection.id);
     } catch (error) {
       await _disposeClient(client);
       throw SshTunnelException('Could not open a local tunnel port: $error');
@@ -253,6 +267,25 @@ class SshTunnelService {
     _tunnels[connection.id] = tunnel;
     tunnel.listen();
     return tunnel.session;
+  }
+
+  /// Binds the connection's previous loopback port when it is still free.
+  Future<ServerSocket> _bindLocal(String connectionId) async {
+    final preferred = _preferredPorts[connectionId];
+    if (preferred != null) {
+      try {
+        final socket = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          preferred,
+        );
+        return socket;
+      } catch (_) {
+        // Taken since the last tunnel; fall through to an ephemeral port.
+      }
+    }
+    final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    _preferredPorts[connectionId] = socket.port;
+    return socket;
   }
 
   /// Mints a fresh attach credential over a live tunnel.
@@ -280,6 +313,18 @@ class SshTunnelService {
       protocols: endpoint.protocols,
     );
     return tunnel.session;
+  }
+
+  /// Mints a single-use HTTP ticket for [connectionId]'s gateway.
+  ///
+  /// REST endpoints answer 401 without a signed-in dashboard session; sending
+  /// this ticket as `X-Hermes-Gateway-Ticket` authorises exactly one request.
+  Future<String> mintHttpTicket(String connectionId) async {
+    final tunnel = _tunnels[connectionId];
+    if (tunnel == null || tunnel.isClosed) {
+      throw const SshTunnelException('The SSH tunnel is not up.');
+    }
+    return tunnel.mintHttpTicket();
   }
 
   /// Closes the tunnel for [connectionId], if any.
@@ -443,7 +488,96 @@ class _Tunnel {
   final List<Socket> _sockets = <Socket>[];
   bool _closed = false;
 
+  /// Long-lived `hermes gateway tickets --serve` session, started on demand.
+  SSHSession? _ticketSession;
+  StreamSubscription<String>? _ticketLines;
+  final Map<int, Completer<String>> _ticketWaiters = <int, Completer<String>>{};
+  int _ticketSeq = 0;
+
   bool get isClosed => _closed || client.isClosed;
+
+  Future<String> mintHttpTicket() async {
+    var session = _ticketSession;
+    if (session == null) {
+      session = await _startTicketServe();
+    }
+    final id = ++_ticketSeq;
+    final completer = Completer<String>();
+    _ticketWaiters[id] = completer;
+    final line = '{"id": $id, "purpose": "native-http"}\n';
+    try {
+      session.stdin.add(Uint8List.fromList(utf8.encode(line)));
+    } catch (error) {
+      _ticketWaiters.remove(id);
+      _ticketSession = null;
+      throw SshTunnelException('Could not ask the host for a ticket: $error');
+    }
+    return completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        _ticketWaiters.remove(id);
+        throw const SshTunnelException(
+          'The host did not answer the ticket request in time.',
+        );
+      },
+    );
+  }
+
+  Future<SSHSession> _startTicketServe() async {
+    if (isClosed) {
+      throw const SshTunnelException('The SSH tunnel is not up.');
+    }
+    final session = await client.execute(SshTunnelService.defaultTicketCommand);
+    _ticketSession = session;
+    _ticketLines = session.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen(_handleTicketLine, onDone: _handleTicketGone);
+    // Surface a fast failure instead of waiting for the per-mint timeout.
+    unawaited(
+      session.done.then((_) {
+        if (identical(_ticketSession, session)) _handleTicketGone();
+      }),
+    );
+    return session;
+  }
+
+  void _handleTicketLine(String line) {
+    final text = line.trim();
+    if (text.isEmpty || !text.startsWith('{')) return;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } catch (_) {
+      return;
+    }
+    if (decoded is! Map) return;
+    final id = decoded['id'];
+    if (id is! int) return; // the hello line carries no numeric id
+    final waiter = _ticketWaiters.remove(id);
+    if (waiter == null || waiter.isCompleted) return;
+    final ticket = decoded['ticket'];
+    if (decoded['ok'] == true && ticket is String && ticket.isNotEmpty) {
+      waiter.complete(ticket);
+    } else {
+      waiter.completeError(
+        const SshTunnelException('The host refused the ticket request.'),
+      );
+    }
+  }
+
+  void _handleTicketGone() {
+    final waiters = List<Completer<String>>.of(_ticketWaiters.values);
+    _ticketWaiters.clear();
+    _ticketSession = null;
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.completeError(
+          const SshTunnelException('The ticket helper on the host exited.'),
+        );
+      }
+    }
+  }
 
   void listen() {
     server.listen((Socket socket) {
@@ -510,6 +644,14 @@ class _Tunnel {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    try {
+      await _ticketLines?.cancel();
+    } catch (_) {}
+    _ticketLines = null;
+    try {
+      await _ticketSession?.close();
+    } catch (_) {}
+    _handleTicketGone();
     for (final socket in List<Socket>.of(_sockets)) {
       try {
         socket.destroy();
@@ -523,4 +665,32 @@ class _Tunnel {
       client.close();
     } catch (_) {}
   }
+}
+
+/// Adds a freshly minted single-use gateway ticket to every REST request.
+///
+/// The dashboard authorises `/api/*` with a session cookie or a one-shot
+/// ticket. An SSH-only connection has neither, so the ticket is minted over the
+/// tunnel for each request.
+class SshTicketHttpClient extends http.BaseClient {
+  SshTicketHttpClient(this._inner, this.connectionId);
+
+  final http.Client _inner;
+  final String connectionId;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    try {
+      final ticket = await SshTunnelService.instance.mintHttpTicket(
+        connectionId,
+      );
+      request.headers['X-Hermes-Gateway-Ticket'] = ticket;
+    } catch (_) {
+      // No tunnel (yet): send it unauthenticated and let the 401 surface.
+    }
+    return _inner.send(request);
+  }
+
+  @override
+  void close() => _inner.close();
 }

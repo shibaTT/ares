@@ -115,6 +115,9 @@ class SavedConnection {
     this.ssh,
   });
 
+  /// Tunnel base URL currently published for this connection, if any.
+  String? get sshResolvedBaseUrl => _sshResolvedBaseUrls[id];
+
   /// The dashboard address of a [singleLogin] connection.
   ///
   /// While an SSH tunnel is live for this connection its loopback address wins,

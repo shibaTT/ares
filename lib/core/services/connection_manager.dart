@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 import '../models/client_certificate.dart';
 import '../models/connection.dart';
 import '../models/ssh_tunnel.dart';
+import 'ssh_tunnel_service.dart';
 import '../models/session.dart';
 import '../models/provider_oauth.dart';
 import '../models/fallback_config.dart';
@@ -2595,6 +2596,14 @@ class DashboardClient {
     final origin = Uri.parse(
       DesktopGatewayClient.normalizedGatewayBaseUrl(connection),
     );
+    final rest =
+        httpClient ??
+        tlsClientFactory.createRestClient(connection.clientCertificate);
+    // An SSH-only connection has no dashboard session, so every REST call
+    // carries its own single-use gateway ticket minted over the tunnel.
+    final client = connection.ssh == null
+        ? rest
+        : SshTicketHttpClient(rest, connection.id);
     return DashboardClient(
       host: origin.host,
       port: origin.port,
@@ -2606,7 +2615,7 @@ class DashboardClient {
       gatewayProfile: connection.gatewayProfile,
       clientCertificate: connection.clientCertificate,
       tlsClientFactory: tlsClientFactory,
-      httpClient: httpClient,
+      httpClient: client,
     );
   }
 
