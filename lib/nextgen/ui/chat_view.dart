@@ -748,12 +748,49 @@ class _NgChatViewState extends State<NgChatView> {
     );
   }
 
+  /// Confirms, then rewinds the session to [rowId] and re-reads the chat.
+  Future<void> _confirmRewind(String? rowId) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('ここまで戻す'),
+        content: const Text(
+          'このメッセージ以降のやり取りをセッションから外します。やり直したいときに使えます。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('戻す'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final result = await chat.rewindTo(rowId);
+    if (!mounted) return;
+    switch (result) {
+      case NgRewindDone(:final removed):
+        ngToast(context, '$removed件のやり取りを外しました');
+      case NgRewindNothing():
+        ngToast(context, '戻せるやり取りがありませんでした');
+      case NgRewindFailed(:final message):
+        ngToast(context, message);
+    }
+  }
+
   Widget _row(NgColors c, NgItem item, int i, int lastUserIndex) {
     final items = chat.items;
     return switch (item) {
       NgUserItem() => _UserBubble(
         item: item,
         onRetry: i == lastUserIndex && !chat.running ? chat.retryLast : null,
+        onRewind: item.rowId != null && !chat.running
+            ? () => _confirmRewind(item.rowId)
+            : null,
       ),
       NgAssistantItem() => _AssistantBlock(
         item: item,
@@ -1062,9 +1099,45 @@ class _SystemCardState extends State<_SystemCard> {
 }
 
 class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.item, this.onRetry});
+  const _UserBubble({required this.item, this.onRetry, this.onRewind});
   final NgUserItem item;
   final VoidCallback? onRetry;
+
+  /// Rewinds the session to this turn; null when it cannot be a target.
+  final VoidCallback? onRewind;
+
+  void _actions(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy_all_outlined),
+              title: const Text('コピー'),
+              onTap: () {
+                Navigator.pop(sheet);
+                Clipboard.setData(ClipboardData(text: item.text));
+                ngToast(context, ngL.ng_copied);
+              },
+            ),
+            if (onRewind != null)
+              ListTile(
+                leading: const Icon(Icons.undo),
+                title: const Text('ここまで戻す'),
+                subtitle: const Text('このメッセージ以降をセッションから外します'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  onRewind!();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1084,10 +1157,7 @@ class _UserBubble extends StatelessWidget {
             ),
           if (item.text.isNotEmpty)
             GestureDetector(
-              onLongPress: () {
-                Clipboard.setData(ClipboardData(text: item.text));
-                ngToast(context, ngL.ng_copied);
-              },
+              onLongPress: () => _actions(context),
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 14,

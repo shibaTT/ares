@@ -162,6 +162,10 @@ List<Map<String, dynamic>> ngFromFirstTurn(List<Map<String, dynamic>> page) {
 sealed class NgItem {
   final String key;
   NgItem(this.key);
+
+  /// Stored row id behind this item when the transcript came from the
+  /// gateway. Rewind targets one of these; live, unsent items have none.
+  String? rowId;
 }
 
 class NgUserItem extends NgItem {
@@ -504,6 +508,33 @@ class NgUsage {
   }
 }
 
+/// Outcome of asking the gateway to rewind a chat to one of its user turns.
+sealed class NgRewindResult {
+  const NgRewindResult();
+}
+
+/// Rows after the target were taken out of the live context.
+class NgRewindDone extends NgRewindResult {
+  const NgRewindDone({required this.removed, this.text = ''});
+
+  /// How many transcript rows the gateway deactivated.
+  final int removed;
+
+  /// Text of the rewound user turn, so a caller could offer to re-send it.
+  final String text;
+}
+
+/// The target was already the newest turn: nothing to rewind.
+class NgRewindNothing extends NgRewindResult {
+  const NgRewindNothing();
+}
+
+/// The gateway refused, or the chat had no authority to mutate.
+class NgRewindFailed extends NgRewindResult {
+  const NgRewindFailed(this.message);
+  final String message;
+}
+
 class NgChatController extends ChangeNotifier {
   NgChatController(
     this.gateway, {
@@ -631,6 +662,14 @@ class NgChatController extends ChangeNotifier {
   int? _executionGeneration;
 
   String _key(String prefix) => '$prefix-${_seq++}';
+
+  /// The stored row id behind a transcript row, when the gateway sent one.
+  static String? _rowIdOf(Map<String, dynamic> row) {
+    final id = row['id'];
+    if (id == null) return null;
+    final text = id.toString();
+    return text.isEmpty ? null : text;
+  }
 
   /// Coalesces high-frequency streaming deltas to one notification per frame.
   /// Terminal events (turn end, errors, requests) use [_changedNow] instead.
@@ -1029,7 +1068,7 @@ class NgChatController extends ChangeNotifier {
                 body,
                 time: _time(m['timestamp']),
                 files: files,
-              ),
+              )..rowId = _rowIdOf(m),
             );
           } else {
             reply = NgAssistantItem(_key('a'), open: false);
@@ -1059,7 +1098,7 @@ class NgChatController extends ChangeNotifier {
             time: _time(m['timestamp']),
             steered: displayKind == 'steer',
             files: files,
-          ),
+          )..rowId = _rowIdOf(m),
         );
       } else if (role == 'assistant') {
         reply ??= () {
@@ -2118,6 +2157,47 @@ class NgChatController extends ChangeNotifier {
       attachments: last.failure != null ? last.attachments : const [],
       submissionId: last.failure != null ? last.submissionId : null,
     );
+  }
+
+  /// Rewinds the session to [rowId] (a stored `user` row): that turn and
+  /// everything after it leave the live context, as Hermes' `/rewind` does.
+  ///
+  /// The gateway owns the transcript, so the chat is re-read afterwards; the
+  /// mutated rows stay on disk but are no longer part of the session.
+  Future<NgRewindResult> rewindTo(String? rowId) async {
+    final id = storedId;
+    final target = rowId == null ? null : int.tryParse(rowId);
+    if (id == null || target == null) {
+      return const NgRewindFailed('このメッセージは巻き戻しできません。');
+    }
+    if (running) {
+      return const NgRewindFailed('実行中は巻き戻せません。終わってから試してください。');
+    }
+    if (_revision == null || _executionGeneration == null) await _attach();
+    if (_revision == null || _executionGeneration == null) {
+      return const NgRewindFailed('接続が切れています。再接続してから試してください。');
+    }
+    try {
+      final result = await gateway.call('session.mutate', {
+        'session_id': id,
+        'request_id': const Uuid().v4(),
+        'expected_revision': _revision,
+        'expected_generation': _executionGeneration,
+        'operation': 'rewind',
+        'payload': {'target_message_id': target},
+      });
+      _withAuthority(result);
+      final removed = _authorityInt(result['rewound_count']) ?? 0;
+      if (result['status']?.toString() == 'nothing' || removed == 0) {
+        return const NgRewindNothing();
+      }
+      final kept = result['target_message'];
+      final text = kept is Map ? _plain(kept['content']) : '';
+      await open();
+      return NgRewindDone(removed: removed, text: text);
+    } catch (e) {
+      return NgRewindFailed(_clean(e));
+    }
   }
 
   bool _answer(Map<String, dynamic> result) {
