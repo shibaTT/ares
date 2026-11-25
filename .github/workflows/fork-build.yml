@@ -41,6 +41,7 @@ jobs:
         run: flutter pub get
       - name: Build release APK (arm64)
         env:
+          FORK_ABI_ARM64: 'true'
           FORK_KEYSTORE_FILE: ${{ env.KEYSTORE_PATH }}
           FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
           FORK_KEY_ALIAS: ${{ secrets.FORK_KEY_ALIAS }}
@@ -50,6 +51,7 @@ jobs:
       # runs even if a release-only shrink step misbehaves.
       - name: Build debug APK (arm64)
         env:
+          FORK_ABI_ARM64: 'true'
           FORK_KEYSTORE_FILE: ${{ env.KEYSTORE_PATH }}
           FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
           FORK_KEY_ALIAS: ${{ secrets.FORK_KEY_ALIAS }}

@@ -40,6 +40,15 @@ android {
        versionName = flutter.versionName
        manifestPlaceholders["appLabel"] = "Ares"
        buildConfigField("boolean", "PLAY_BUILD", playBuild.toString())
+       // The voice AAR (onnxruntime + sherpa-onnx) carries armeabi-v7a,
+       // arm64-v8a and x86_64, so --target-platform alone still packages all
+       // three. Fork CI ships arm64 only, which is about half the size.
+       if (System.getenv("FORK_ABI_ARM64") == "true") {
+           ndk {
+               abiFilters.clear()
+               abiFilters.add("arm64-v8a")
+           }
+       }
        }
 
        buildFeatures {
