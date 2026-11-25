@@ -8,6 +8,7 @@ import 'package:hermes_android/core/l10n/l10n.dart';
 
 import '../../core/models/session.dart';
 import '../../core/utils/session_sources.dart';
+import '../../core/services/local_session_groups.dart';
 import '../data/seen_chats.dart';
 import '../theme/nextgen_theme.dart';
 import 'nextgen_scope.dart';
@@ -372,6 +373,17 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
   final _scroll = ScrollController();
   NgSidebarFilter _filter = NgSidebarFilter.all;
 
+  /// Device-only chat groups: name -> member session ids.
+  LocalSessionGroups? _groupStore;
+  Map<String, List<String>> _groups = <String, List<String>>{};
+
+  /// Collapsed groups, and how many chats each one currently shows.
+  final Map<String, bool> _collapsed = <String, bool>{};
+  final Map<String, int> _shown = <String, int>{};
+
+  /// Chats one "show more" reveals.
+  static const int _groupPage = 10;
+
   @override
   void initState() {
     super.initState();
@@ -379,6 +391,18 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
     _scroll.addListener(() {
       if (_scroll.position.extentAfter < 400) widget.model.loadMore();
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scope = NgScope.of(context);
+    if (_groupStore?.connectionId == scope.connection.id) return;
+    _groupStore = LocalSessionGroups(
+      scope.prefs,
+      connectionId: scope.connection.id,
+    );
+    _groups = _groupStore!.load();
   }
 
   @override
@@ -436,6 +460,12 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
               onTap: () => Navigator.pop(context, 'rename'),
             ),
             ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('グループ'),
+              subtitle: Text(_groupOf(s.id) ?? '未分類'),
+              onTap: () => Navigator.pop(context, 'group'),
+            ),
+            ListTile(
               leading: const Icon(Icons.archive_outlined),
               title: Text(ngL.ng_archive),
               onTap: () => Navigator.pop(context, 'archive'),
@@ -470,6 +500,8 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
           if (title == null || title.trim().isEmpty) return;
           await api.renameSession(sessionId: s.id, title: title);
           await widget.model.refresh();
+        case 'group':
+          await _pickGroup(s);
         case 'archive':
           await api.setSessionArchived(
             sessionId: s.id,
@@ -528,11 +560,24 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                     .where((s) => s.source == 'discord' && !isCronSession(s))
                     .toList(),
             };
+            // Groups replace the plain list only on the unfiltered view: a
+            // filter or a search is a flat question about all chats.
+            final groups =
+                _filter == NgSidebarFilter.all && widget.model.query.isEmpty
+                ? _groups
+                : const <String, List<String>>{};
+            final groupedIds = <String>{
+              for (final ids in groups.values) ...ids,
+            };
             final pinned =
                 _filter == NgSidebarFilter.all && widget.model.query.isEmpty
-                ? filtered.where((s) => s.pinned).toList()
+                ? filtered
+                      .where((s) => s.pinned && !groupedIds.contains(s.id))
+                      .toList()
                 : <Session>[];
-            final rest = filtered.where((s) => !pinned.contains(s)).toList();
+            final rest = filtered
+                .where((s) => !pinned.contains(s) && !groupedIds.contains(s.id))
+                .toList();
             return Column(
               children: [
                 Padding(
@@ -603,7 +648,10 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                           NgSectionLabel(ngL.ng_pinned),
                           for (final s in pinned) _tile(c, s, needsYou),
                         ],
-                        if (pinned.isNotEmpty && rest.isNotEmpty)
+                        for (final entry in groups.entries)
+                          ..._groupSection(c, entry.key, entry.value, all, needsYou),
+                        if (rest.isNotEmpty &&
+                            (pinned.isNotEmpty || groups.isNotEmpty))
                           NgSectionLabel(ngL.ng_recent),
                         if (widget.model.error != null && all.isEmpty)
                           Padding(
@@ -785,6 +833,151 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
         ],
       ),
     );
+  }
+
+  /// The group a chat sits in, if any.
+  String? _groupOf(String sessionId) {
+    for (final entry in _groups.entries) {
+      if (entry.value.contains(sessionId)) return entry.key;
+    }
+    return null;
+  }
+
+  /// Files [s] into an existing group, a new one, or none at all.
+  Future<void> _pickGroup(Session s) async {
+    final store = _groupStore;
+    if (store == null) return;
+    final current = _groupOf(s.id);
+    final names = _groups.keys.toList();
+    final choice = await showNgSheet<String>(
+      context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Text(
+                'グループ',
+                style: NgType.heading.copyWith(color: NgColors.of(context).text),
+              ),
+            ),
+            for (final name in names)
+              ListTile(
+                leading: Icon(
+                  name == current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(name),
+                trailing: Text('${_groups[name]?.length ?? 0}'),
+                onTap: () => Navigator.pop(context, name),
+              ),
+            ListTile(
+              leading: const Icon(Icons.add),
+              title: const Text('新しいグループ…'),
+              onTap: () => Navigator.pop(context, _newGroupToken),
+            ),
+            if (current != null)
+              ListTile(
+                leading: const Icon(Icons.remove_circle_outline),
+                title: const Text('グループから外す'),
+                onTap: () => Navigator.pop(context, _noGroupToken),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    var target = choice;
+    if (target == _newGroupToken) {
+      final name = await ngPromptText(
+        context,
+        title: '新しいグループ名',
+        initial: '',
+      );
+      if (name == null || name.trim().isEmpty) return;
+      target = name.trim();
+    } else if (target == _noGroupToken) {
+      target = '';
+    }
+    try {
+      final next = await store.assign(s.id, target.isEmpty ? null : target);
+      if (!mounted) return;
+      setState(() {
+        _groups = next;
+        _collapsed[target] = false;
+      });
+    } catch (e) {
+      if (mounted) ngToast(context, '$e');
+    }
+  }
+
+  /// Sentinel choices of the group sheet (a chat can't be named these).
+  static const String _newGroupToken = '\u0000new-group';
+  static const String _noGroupToken = '\u0000no-group';
+
+  /// A collapsible group: header, up to [_groupPage] chats, then "show more".
+  List<Widget> _groupSection(
+    NgColors c,
+    String name,
+    List<String> ids,
+    List<Session> all,
+    Set<String> needsYou,
+  ) {
+    final byId = {for (final s in all) s.id: s};
+    final members = [
+      for (final id in ids)
+        if (byId[id] != null) byId[id]!,
+    ];
+    if (members.isEmpty) return const <Widget>[];
+    final collapsed = _collapsed[name] ?? false;
+    final shown = _shown[name] ?? _groupPage;
+    final visible = collapsed ? const <Session>[] : members.take(shown).toList();
+    final remaining = members.length - visible.length;
+    return [
+      InkWell(
+        key: ValueKey('ng-group-$name'),
+        borderRadius: BorderRadius.circular(NgRadii.sm),
+        onTap: () => setState(() => _collapsed[name] = !collapsed),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(6, 12, 8, 4),
+          child: Row(
+            children: [
+              Icon(
+                collapsed ? Icons.chevron_right : Icons.expand_more,
+                size: 18,
+                color: c.text3,
+              ),
+              const SizedBox(width: 2),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: NgType.label.copyWith(
+                    color: c.text,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                '${members.length}',
+                style: NgType.caption.copyWith(color: c.text3),
+              ),
+            ],
+          ),
+        ),
+      ),
+      for (final s in visible) _tile(c, s, needsYou),
+      if (!collapsed && remaining > 0)
+        Center(
+          child: TextButton(
+            onPressed: () => setState(() => _shown[name] = shown + _groupPage),
+            child: Text('もっと見る（残り$remaining件）'),
+          ),
+        ),
+    ];
   }
 
   Widget _tile(NgColors c, Session s, Set<String> needsYou) {

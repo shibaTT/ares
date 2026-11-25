@@ -6,7 +6,7 @@ on:
     branches-ignore: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   KEYSTORE_PATH: ${{ github.workspace }}/android/fork-debug.jks
@@ -59,3 +59,14 @@ jobs:
           name: ares-ssh-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
+      # Obtainium follows GitHub releases: tag = versionCode so updates order
+      # numerically, and one .apk asset per release.
+      - name: Publish release for Obtainium
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-debug.apk "ares-fork-$VERSION_CODE.apk"
+          gh release create "$VERSION_CODE" "ares-fork-$VERSION_CODE.apk" \
+            --repo "${{ github.repository }}" \
+            --title "Ares fork $VERSION_CODE" \
+            --notes "SSH tunnel + Discord filter + rewind. versionCode $VERSION_CODE."
