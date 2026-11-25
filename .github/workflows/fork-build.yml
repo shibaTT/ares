@@ -39,6 +39,15 @@ jobs:
           echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: flutter pub get
+      - name: Build release APK (arm64)
+        env:
+          FORK_KEYSTORE_FILE: ${{ env.KEYSTORE_PATH }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_ALIAS: ${{ secrets.FORK_KEY_ALIAS }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
+        run: flutter build apk --release --target-platform android-arm64
+      # Debug is kept as a fallback download: it is ~5x the size, but it always
+      # runs even if a release-only shrink step misbehaves.
       - name: Build debug APK (arm64)
         env:
           FORK_KEYSTORE_FILE: ${{ env.KEYSTORE_PATH }}
@@ -48,16 +57,21 @@ jobs:
         run: flutter build apk --debug --target-platform android-arm64
       - name: Verify signature and versionCode
         run: |
-          APK=build/app/outputs/flutter-apk/app-debug.apk
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           echo "build-tools: $BT"
-          "$BT/apksigner" verify --print-certs "$APK" | head -4
-          "$BT/aapt2" dump badging "$APK" | grep -E "^package:"
-      - name: Upload APK
+          for APK in build/app/outputs/flutter-apk/app-release.apk \
+                     build/app/outputs/flutter-apk/app-debug.apk; do
+            echo "== $APK ($(du -h "$APK" | cut -f1))"
+            "$BT/apksigner" verify --print-certs "$APK" | head -4
+            "$BT/aapt2" dump badging "$APK" | grep -E "^package:"
+          done
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: ares-ssh-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: ares-ssh-apk
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
       # Obtainium follows GitHub releases: tag = versionCode so updates order
       # numerically, and one .apk asset per release.
@@ -65,7 +79,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp build/app/outputs/flutter-apk/app-debug.apk "ares-fork-$VERSION_CODE.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "ares-fork-$VERSION_CODE.apk"
+          ls -l "$PWD/ares-fork-$VERSION_CODE.apk"
           gh release create "$VERSION_CODE" "ares-fork-$VERSION_CODE.apk" \
             --repo "${{ github.repository }}" \
             --title "Ares fork $VERSION_CODE" \

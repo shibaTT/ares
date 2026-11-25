@@ -93,6 +93,15 @@ android {
            if (keystorePath.exists()) {
                signingConfig = signingConfigs.getByName("release")
            }
+           // Fork CI ships release builds under the same package and label as
+           // the fork's dev builds, so an installed build upgrades in place.
+           val forkStore = System.getenv("FORK_KEYSTORE_FILE")
+           if (!keystorePath.exists() && !forkStore.isNullOrEmpty() && File(forkStore).exists()) {
+               applicationIdSuffix = ".dev"
+               versionNameSuffix = "-dev"
+               manifestPlaceholders["appLabel"] = "Ares"
+               signingConfig = signingConfigs.getByName("fork")
+           }
        }
    }
 
