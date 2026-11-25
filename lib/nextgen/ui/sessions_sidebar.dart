@@ -852,9 +852,10 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
     final choice = await showNgSheet<String>(
       context,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
               child: Text(
@@ -884,7 +885,8 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                 title: const Text('グループから外す'),
                 onTap: () => Navigator.pop(context, _noGroupToken),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );

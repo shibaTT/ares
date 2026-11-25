@@ -1177,6 +1177,29 @@ class _UserBubble extends StatelessWidget {
                 ),
               ),
             ),
+          if (item.text.isNotEmpty && !item.pending)
+            Padding(
+              padding: const EdgeInsets.only(top: 2, right: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _MessageAction(
+                    icon: Icons.copy_all_outlined,
+                    tooltip: 'コピー',
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: item.text));
+                      ngToast(context, ngL.ng_copied);
+                    },
+                  ),
+                  if (onRewind != null)
+                    _MessageAction(
+                      icon: Icons.undo,
+                      tooltip: 'ここまで戻す',
+                      onTap: onRewind!,
+                    ),
+                ],
+              ),
+            ),
           if (item.attachments.isEmpty && item.files.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -2166,4 +2189,31 @@ class _NoListenable implements Listenable {
   void addListener(VoidCallback listener) {}
   @override
   void removeListener(VoidCallback listener) {}
+}
+
+/// A small, quiet action under a sent message (copy, rewind).
+class _MessageAction extends StatelessWidget {
+  const _MessageAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = NgColors.of(context);
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 16, color: c.text3),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      splashRadius: 18,
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 30),
+      onPressed: onTap,
+    );
+  }
 }
