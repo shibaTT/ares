@@ -55,6 +55,18 @@ class NgSessionsModel extends ChangeNotifier {
   /// The chat on screen: never unread while it's shown.
   String? currentId;
 
+  /// The stored id of the chat that is actually executing a turn.
+  ///
+  /// The gateway's `is_active` is only "touched in the last 5 minutes", so the
+  /// sidebar must not spin on it; this is the real signal.
+  String? runningId;
+
+  void setRunning(String? id) {
+    if (runningId == id) return;
+    runningId = id;
+    notifyListeners();
+  }
+
   NgSeenStore? _seen;
   NgSeenStore get seen =>
       _seen ??= NgSeenStore(scope.prefs, scope.connection.id);
@@ -1028,7 +1040,7 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                     padding: const EdgeInsets.only(right: 8),
                     child: Icon(Icons.pan_tool_alt, size: 15, color: c.warning),
                   )
-                else if (s.isActive)
+                else if (s.id == widget.model.runningId)
                   Padding(
                     padding: const EdgeInsets.only(right: 10),
                     child: SizedBox(
@@ -1037,6 +1049,19 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                       child: CircularProgressIndicator(
                         strokeWidth: 1.6,
                         color: c.accent,
+                      ),
+                    ),
+                  ),
+                else if (s.isActive)
+                  // Recently touched, not running: a dot, never a spinner.
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12, left: 2),
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: c.text3.withValues(alpha: 0.7),
+                        shape: BoxShape.circle,
                       ),
                     ),
                   ),

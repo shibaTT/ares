@@ -11,6 +11,7 @@ import '../../core/services/turn_notification_service.dart';
 import '../data/nextgen_gateway.dart';
 import '../data/chat_controller.dart';
 import '../nextgen_preferences.dart';
+import '../theme/nextgen_theme.dart';
 import 'capabilities_page.dart';
 import 'chat_view.dart';
 import 'insights_page.dart';
@@ -367,6 +368,19 @@ class _NgMainPageState extends State<NgMainPage> with WidgetsBindingObserver {
 
   bool _chatWasRunning = false;
 
+  /// Opens the chat a pending request belongs to, or shows it in this one.
+  void _focusRequest(NgServerRequest request) {
+    final id = request.sessionId;
+    final stored = id == null
+        ? null
+        : NgScope.of(context).gateway.storedIdFor(id);
+    if (stored != null && stored != _chat?.storedId) {
+      _openId(stored, '');
+      return;
+    }
+    _chat?.adoptRequest(request);
+  }
+
   void _onChatChanged() {
     final chat = _chat;
     if (chat == null) return;
@@ -376,6 +390,7 @@ class _NgMainPageState extends State<NgMainPage> with WidgetsBindingObserver {
     }
     _chatWasRunning = chat.running;
     nextGenTurnActive.value = chat.running;
+    _sessions?.setRunning(chat.running ? chat.storedId : null);
   }
 
   void _turnFinished(NgChatController chat) {
@@ -495,14 +510,92 @@ class _NgMainPageState extends State<NgMainPage> with WidgetsBindingObserver {
         ),
         body: chat == null
             ? const SizedBox.shrink()
-            : NgChatView(
-                key: ObjectKey(chat),
-                chat: chat,
-                onOpenSidebar: () => _scaffold.currentState?.openDrawer(),
-                sessions: _sessions,
-                onNewChat: _newChat,
+            : Column(
+                children: [
+                  _PendingRequestBanner(
+                    gateway: NgScope.of(context).gateway,
+                    chat: chat,
+                    onOpen: _focusRequest,
+                  ),
+                  Expanded(
+                    child: NgChatView(
+                      key: ObjectKey(chat),
+                      chat: chat,
+                      onOpenSidebar: () => _scaffold.currentState?.openDrawer(),
+                      sessions: _sessions,
+                      onNewChat: _newChat,
+                    ),
+                  ),
+                ],
               ),
       ),
+    );
+  }
+}
+
+/// Says that the agent is blocked on an answer this chat isn't showing.
+///
+/// A request can be bound to a runtime the app never resumed (another surface
+/// opened it, or the id arrived before the chat bound its own), which used to
+/// make the question silently vanish.
+class _PendingRequestBanner extends StatelessWidget {
+  const _PendingRequestBanner({
+    required this.gateway,
+    required this.chat,
+    required this.onOpen,
+  });
+
+  final NextGenGateway gateway;
+  final NgChatController chat;
+  final ValueChanged<NgServerRequest> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([gateway, chat]),
+      builder: (context, _) {
+        final shown = chat.request?.request.id;
+        final pending = [
+          for (final request in gateway.openRequests.values)
+            if (request.id != shown) request,
+        ];
+        if (pending.isEmpty) return const SizedBox.shrink();
+        final c = NgColors.of(context);
+        final first = pending.first;
+        final label = pending.length == 1
+            ? (first.method == 'clarify'
+                  ? '質問が届いています'
+                  : '確認待ちがあります')
+            : '${pending.length}件の確認待ちがあります';
+        return Material(
+          color: c.warning.withValues(alpha: 0.16),
+          child: InkWell(
+            onTap: () => onOpen(first),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              child: Row(
+                children: [
+                  Icon(Icons.pan_tool_alt, size: 16, color: c.warning),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: NgType.label.copyWith(color: c.text),
+                    ),
+                  ),
+                  Text(
+                    '開く',
+                    style: NgType.label.copyWith(
+                      color: c.accent,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

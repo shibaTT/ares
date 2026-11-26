@@ -1759,7 +1759,24 @@ class NgChatController extends ChangeNotifier {
   void _onServerRequest(NgServerRequest req) {
     if (_disposed) return;
     final id = req.sessionId;
-    if (id == null || (id != runtimeId && id != storedId)) return;
+    // The gateway may answer a stored session from a runtime another surface
+    // opened, so the stored mapping counts as identity too.
+    final mapped = id == null ? null : gateway.storedIdFor(id);
+    final mine =
+        id == null ||
+        id == runtimeId ||
+        id == storedId ||
+        (mapped != null && storedId != null && mapped == storedId);
+    if (!mine) return;
+    final parsed = NgInputRequest.parse(req);
+    if (parsed == null) return;
+    request = parsed;
+    _changedNow();
+  }
+
+  /// Shows [req] here even though its runtime isn't bound to this chat yet.
+  void adoptRequest(NgServerRequest req) {
+    if (_disposed) return;
     final parsed = NgInputRequest.parse(req);
     if (parsed == null) return;
     request = parsed;
