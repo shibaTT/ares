@@ -1051,7 +1051,7 @@ class _NgSessionsSidebarState extends State<NgSessionsSidebar> {
                         color: c.accent,
                       ),
                     ),
-                  ),
+                  )
                 else if (s.isActive)
                   // Recently touched, not running: a dot, never a spinner.
                   Padding(
